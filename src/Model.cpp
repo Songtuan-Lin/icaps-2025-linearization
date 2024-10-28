@@ -2437,6 +2437,7 @@ newlyReachedMLMs = new noDelIntSet();
         this->eff_positive = new vector<int>[amount_compound_tasks];
         this->eff_negative = new vector<int>[amount_compound_tasks];
         this->preconditions = new vector<int>[amount_compound_tasks];
+		this->poss_preconditions = new vector<int>[amount_compound_tasks];
 
         this->poss_pos_m = new vector<int>[this->numMethods];
         this->poss_neg_m = new vector<int>[this->numMethods];
@@ -2451,6 +2452,7 @@ newlyReachedMLMs = new noDelIntSet();
                 eff_positive,
                 eff_negative,
                 preconditions,
+                poss_preconditions,
                 amount_compound_tasks);
     }
 

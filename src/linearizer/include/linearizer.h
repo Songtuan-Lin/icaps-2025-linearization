@@ -51,6 +51,53 @@ progression::Model *setup_model(string fileName)
        return m;
 }
 
+
+void get_mentioned(Model* model, bool*** all_pre_eff)
+{
+       for (int mIndex = 0; mIndex < model->numMethods; mIndex++) {
+              for (int tIndex = 0; tIndex < model->numSubTasks[mIndex]; tIndex++) {
+                     int task = model->subTasks[mIndex][tIndex];
+                     if (task >= model->numActions)
+                            continue;
+                     for (int i = 0; i < model->numPrecs[task]; i++)
+                     {
+                            all_pre_eff[0][model->decomposedTask[mIndex]][model->precLists[task][i]] = true;
+                     }
+                     for (int i = 0; i < model->numAdds[task]; i++)
+                     {
+                            all_pre_eff[1][model->decomposedTask[mIndex]][model->addLists[task][i]] = true;
+                     }
+                     for (int i = 0; i < model->numDels[task]; i++)
+                     {
+                            all_pre_eff[2][model->decomposedTask[mIndex]][model->delLists[task][i]] = true;
+                     }
+              }
+       }
+       vector<int> c_updated;
+       for (int c = model->numActions; c < model->numTasks; c++) {
+              c_updated.push_back(c);
+       }
+
+       while (!c_updated.empty()){
+              int task = c_updated.back();
+              c_updated.pop_back();
+              for (int m = 0; m < model->stToMethodNum[task]; m++) {  // mapping from task to methods it is contained as subtasks
+                     int decomposed_task = model->stToMethod[m][task];
+                     for (int var = 0; var < model->numVars; var++)
+                     {
+                            if ((!all_pre_eff[0][decomposed_task][var] && all_pre_eff[0][task][var]) ||
+                                   (!all_pre_eff[1][decomposed_task][var] && all_pre_eff[1][task][var]) ||
+                                   (!all_pre_eff[2][decomposed_task][var] && all_pre_eff[2][task][var]))
+                                   c_updated.push_back(decomposed_task);
+                            all_pre_eff[0][decomposed_task][var] = all_pre_eff[0][decomposed_task][var] || all_pre_eff[0][task][var];
+                            all_pre_eff[1][decomposed_task][var] = all_pre_eff[1][decomposed_task][var] || all_pre_eff[1][task][var];
+                            all_pre_eff[2][decomposed_task][var] = all_pre_eff[2][decomposed_task][var] || all_pre_eff[2][task][var];
+                     }
+              }
+       }
+
+}
+
 void get_t_pre_eff_(int collect_to_task, int task_to_explore, bool *visited, bool ***all_pre_eff, Model *m, ofstream &o)
 {
        if (!(visited[task_to_explore]))
@@ -490,9 +537,9 @@ void ComplexTopLevelLinearization(Model * m, string domain_out_name, string prob
        m->eff_neg_m = new vector<int>[m->numMethods];
        m->prec_m = new vector<int>[m->numMethods];
 
-       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, amount_compound_tasks);
+       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, m->poss_preconditions, amount_compound_tasks);
        // END: Compute effects
-       printf("Conn'y's Effects computed\n");
+       printf("Conny's Effects computed\n");
 
        // transform prec/eff format
        // set up storage
@@ -721,7 +768,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        float timings[10];
 
        /*************************** CONNY's (was in Model.cpp) *******************************/
-       // BEGIN: Compute possible effects. Just for dev reason i am using var = 0 (first state variable)
+       // BEGIN: Compute possible effects.
        cout << "Calculating preconditions and effects of compound tasks... " << endl;
        (*m).buildOrderingDatastructures();
        int amount_compound_tasks = 0;
@@ -736,6 +783,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        m->eff_positive = new vector<int>[amount_compound_tasks];
        m->eff_negative = new vector<int>[amount_compound_tasks];
        m->preconditions = new vector<int>[amount_compound_tasks];
+       m->poss_preconditions = new vector<int>[amount_compound_tasks];
 
        m->poss_pos_m = new vector<int>[m->numMethods];
        m->poss_neg_m = new vector<int>[m->numMethods];
@@ -743,7 +791,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        m->eff_neg_m = new vector<int>[m->numMethods];
        m->prec_m = new vector<int>[m->numMethods];
 
-       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, amount_compound_tasks);
+       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, m->poss_preconditions, amount_compound_tasks);
        // END: Compute effects
 
        // transform prec/eff format
@@ -900,7 +948,8 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
        // printf("\nBefore: \n");
        // test(m, 0, 20);
 
-       get_task_pre_eff(m, all_pre_eff, o); // get
+       //get_task_pre_eff(m, all_pre_eff, o); // get
+       get_mentioned(m, all_pre_eff);
        auto stop = std::chrono::high_resolution_clock::now();
        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
        float d = static_cast<float>(duration.count()) / 1000000.0;

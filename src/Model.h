@@ -260,6 +260,7 @@ namespace progression {
             vector<int>* eff_positive;
             vector<int>* eff_negative;
             vector<int>* preconditions;
+			vector<int>* poss_preconditions;
 
             vector<int>* poss_pos_m;
             vector<int>* poss_neg_m;

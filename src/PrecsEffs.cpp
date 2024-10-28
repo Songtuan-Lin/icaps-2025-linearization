@@ -1,5 +1,5 @@
 //
-// Created by anonymous on 05.08.21.
+// Created by Conny Olz on 05.08.21 based on code by Maximilian Borowiec
 //
 
 #include "PrecsEffs.h"
@@ -15,7 +15,7 @@ using namespace std;
 
 namespace progression {
     void computeEffectsAndPreconditions(Model* model, vector<int>* poss_eff_positive, vector<int>* poss_eff_negative,
-                                        vector<int>* eff_positive, vector<int>* eff_negative, vector<int>* preconditions, int amount_compound_tasks) {
+                                        vector<int>* eff_positive, vector<int>* eff_negative, vector<int>* preconditions, vector<int>* poss_preconditions, int amount_compound_tasks) {
         long startT=0;
         timeval tp;
         gettimeofday(&tp, NULL);
@@ -23,42 +23,282 @@ namespace progression {
         int** orderedSubTasks = new int*[model->numMethods];
         orderSubTasks(model, orderedSubTasks);
 
+        vector<vector<vector<bool>>> transSuccessors = calculateTransitiveClosure(model);
+
         for (int var = 0; var < model->numStateBits; var++) {
-            computeEffectsOfMethodVariable(model, var, poss_eff_positive, poss_eff_negative, eff_positive, eff_negative,
-                                     amount_compound_tasks, orderedSubTasks);
-            computeRelaxedMethodPreconditions(model, var, preconditions, amount_compound_tasks, orderedSubTasks);
+            //computeEffectsOfMethodVariable(model, var, poss_eff_positive, poss_eff_negative, eff_positive, eff_negative,
+            //                         amount_compound_tasks, orderedSubTasks);
+            computeEffectsOfPOMethodVariable(model, var, poss_eff_positive, poss_eff_negative, eff_positive, eff_negative,
+                                           amount_compound_tasks, transSuccessors);
+            //computeRelaxedMethodPreconditions(model, var, preconditions, amount_compound_tasks, orderedSubTasks);
+            computeRelaxedPOMethodPreconditions(model, var, preconditions, poss_preconditions, amount_compound_tasks, transSuccessors);
         }
-        // exploitInvariants(model);
+        gettimeofday(&tp, NULL);
+        long currentT = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+
+        cout << "- Inference time " << double(currentT - startT) / 1000 << " seconds " << endl;
+        printResults(model, preconditions, poss_eff_positive, eff_positive, poss_eff_negative, eff_negative, amount_compound_tasks);
 
         for (int i = 0; i < model->numMethods; i++) {
             delete orderedSubTasks[i];
         }
         delete[] orderedSubTasks;
-
-        gettimeofday(&tp, NULL);
-        long currentT = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-
-        cout << "- Inference time " << double(currentT - startT) / 1000 << " seconds " << endl;
-        // printResults(model, preconditions, poss_eff_positive, eff_positive, poss_eff_negative, eff_negative, amount_compound_tasks);
     }
 
-    void exploitInvariants(Model* model) {
-         int count = 0;
-        for (int m = 0; m < model->numMethods; m++) {
 
-            for (int i = 0; i < model->eff_pos_m[m].size(); i++) {
-                int eff = model->eff_pos_m[m][i];
-                int var = model->varOfStateBit[eff];
-                for (int j = model->firstIndex[var]; j <= model->lastIndex[var]; j++) {
-                    if (j != eff && find(model->eff_neg_m[m].begin(),  model->eff_neg_m[m].end(), eff) ==  model->eff_neg_m[m].end()) {
-                        model->eff_neg_m[m].push_back(j);
-                        count++;
+    void computeEffectsOfPOMethodVariable(Model* model, int var, vector<int>* poss_eff_positive, vector<int>* poss_eff_negative,
+                                        vector<int>* eff_positive, vector<int>* eff_negative, int amount_compound_tasks,
+                                          vector<vector<vector<bool>>> transSuccessors) {
+        int numActions = model->numActions;
+        int* available_actions = new int[numActions] {0};
+
+        // Step 1: Determine if given state variable is in an action's add or del list
+        for (int index1 = 0; index1 < numActions; index1++) {
+            available_actions[index1] = 0;
+            for (int index2 = 0; index2 < model->numAdds[index1]; index2++) {
+                if (model->addLists[index1][index2] == var) {
+                    available_actions[index1] = 1;
+                    goto cnt;
+                }
+            }
+            for (int index2 = 0; index2 < model->numDels[index1]; index2++) {
+                if (model->delLists[index1][index2] == var) {
+                    available_actions[index1] = -1;
+                    break;
+                }
+            }
+            cnt:;
+        }
+
+        // Step 2: Determine which compound task can lead to an empty refinement
+        bool* empty_compound_tasks = new bool[amount_compound_tasks] {false};
+
+        bool new_empty_found = true;
+        while (new_empty_found) {
+            new_empty_found = false;
+            for (int index1 = 0; index1 < model->numMethods; index1++) {
+                bool is_empty = true;
+
+                int compound_task_index = model->decomposedTask[index1] - numActions;
+                if (empty_compound_tasks[compound_task_index]) {
+                    continue;
+                }
+
+                for (int index2 = 0; index2 < model->numSubTasks[index1]; index2++) {
+                    int subTaskIndex = model->subTasks[index1][index2];
+                    //int subTaskIndex = orderedSubTasks[index1][index2];
+                    if ((subTaskIndex - numActions) < 0 && available_actions[subTaskIndex]) {
+                        is_empty = false;
+                        break;
                     }
+                    if ((subTaskIndex - numActions) >= 0 && !empty_compound_tasks[subTaskIndex - numActions]) {
+                        is_empty = false;
+                        break;
+                    }
+                }
+
+                if (is_empty) {
+                    empty_compound_tasks[compound_task_index] = true;
+                    new_empty_found = true;
                 }
             }
         }
-        cout << "found additional negative effects: " << count << endl;
 
+
+
+        // Step 3: Get the index of the rightmost available primitive task or non-empty compound task
+        //         PO: get the rightmost relevant tasks
+
+        vector<int>* tRem = new vector<int>[model->numMethods];
+        vector<int>* tCheck = new vector<int>[model->numMethods];
+
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+
+            //bool* has_successor = new bool[model->numSubTasks[index1]] {false};
+            //for (int o = 0; o < model->numOrderings[index1]; o+=2)
+            //    has_successor[model->ordering[index1][o]] = true;
+
+            for (int index2 = 0; index2 < model->numLastTasks[index1]; index2++) {
+                tRem[index1].push_back(model->methodsLastTasks[index1][index2]);
+                tCheck[index1].push_back(model->methodsLastTasks[index1][index2]);
+            }
+
+            while (!tCheck[index1].empty()) {
+                int subTaskIndex = tCheck[index1].back();
+                int subTask = model->subTasks[index1][subTaskIndex] - numActions;
+                tCheck[index1].pop_back();
+                // if task admits empty refinement or is primitive but has no relevant effects
+                if ((subTask >= 0 && empty_compound_tasks[subTask]) || (subTask < 0 && available_actions[subTask + numActions]==0)) {
+                    // check also its predecessors
+                    for (int o = 0; o < model->numOrderings[index1]; o+=2) {
+                        if (model->ordering[index1][o+1] == subTaskIndex) {
+                            int predTaskIndex = model->ordering[index1][o];
+                            bool suc_exist = false;
+                            for (int i = 0; i < model->numSubTasks[index1]; i++) {
+                                if (transSuccessors[index1][predTaskIndex][i] && find(tRem[index1].begin(), tRem[index1].end(), i) != tRem[index1].end()) {
+                                    // if i is a successor we have to check whether it can be empty
+                                    if ((model->subTasks[index1][i] < numActions && available_actions[model->subTasks[index1][i]]!=0) || (model->subTasks[index1][i] >= numActions && !empty_compound_tasks[model->subTasks[index1][i]-numActions]))
+                                        suc_exist = true;
+                                }
+
+                            }
+                            if (!suc_exist) {
+                                tRem[index1].push_back(model->ordering[index1][o]);
+                                tCheck[index1].push_back(model->ordering[index1][o]);
+                            }
+
+                        }
+
+                    }
+                }
+            }
+
+        }
+
+        // Step 4:
+
+        vector<int>* adjacent = new vector<int>[amount_compound_tasks];
+
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+            int decomposedTaskIndex = model->decomposedTask[index1] - numActions;
+
+            for(auto const& index2: tRem[index1]){
+
+            //for (int index2 = method_indexes[index1]; index2 < model->numSubTasks[index1]; index2++) {
+                int nextTaskInTN = model->subTasks[index1][index2];
+                //int nextTaskInTN = orderedSubTasks[index1][index2];
+                int compoundTaskIndex = nextTaskInTN - numActions;
+
+                if (compoundTaskIndex < 0 && available_actions[nextTaskInTN] == 1) {
+                    if (poss_eff_positive[decomposedTaskIndex].empty() || poss_eff_positive[decomposedTaskIndex].back() != var){
+                        poss_eff_positive[decomposedTaskIndex].push_back(var);
+                    }
+
+                } else if (compoundTaskIndex < 0 && available_actions[nextTaskInTN] == -1 ) {
+                    if (poss_eff_negative[decomposedTaskIndex].empty() || poss_eff_negative[decomposedTaskIndex].back() != var)
+                        poss_eff_negative[decomposedTaskIndex].push_back(var);
+                } else if (compoundTaskIndex >= 0) {
+                    // adjacent[compoundTaskIndex][decomposedTaskIndex] = true;
+                    adjacent[compoundTaskIndex].push_back(decomposedTaskIndex);
+                }
+            }
+        }
+
+        // Step 5:
+        bool state_added = true;
+        while (state_added) {
+            state_added = false;
+            for (int index1 = 0; index1 < amount_compound_tasks; index1++) {
+
+                for(auto const& index2: adjacent[index1]){
+
+                    //bool inPositiveC1 = find(poss_eff_positive[index1].begin(), poss_eff_positive[index1].end(), var) != poss_eff_positive[index1].end();
+                    //bool inPositiveC2 = find(poss_eff_positive[index2].begin(), poss_eff_positive[index2].end(), var) != poss_eff_positive[index2].end();
+                    //bool inNegativeC1 = find(poss_eff_negative[index1].begin(), poss_eff_negative[index1].end(), var) != poss_eff_negative[index1].end();
+                    //bool inNegativeC2 = find(poss_eff_negative[index2].begin(), poss_eff_negative[index2].end(), var) != poss_eff_negative[index2].end();
+                    bool inPositiveC1 = !poss_eff_positive[index1].empty() && poss_eff_positive[index1].back() == var;
+                    bool inPositiveC2 = !poss_eff_positive[index2].empty() && poss_eff_positive[index2].back() == var;
+                    bool inNegativeC1 = !poss_eff_negative[index1].empty() && poss_eff_negative[index1].back() == var;
+                    bool inNegativeC2 = !poss_eff_negative[index2].empty() && poss_eff_negative[index2].back() == var;
+
+                    if (inPositiveC1 && !inPositiveC2) {
+                        poss_eff_positive[index2].push_back(var);
+                        state_added = true;
+                    }
+                    if (inNegativeC1 && !inNegativeC2) {
+                        poss_eff_negative[index2].push_back(var);
+                        state_added = true;
+                    }
+
+                }
+            }
+        }
+
+        // Step 6: Calculate guaranteed effects
+        for (int index1 = 0; index1 < amount_compound_tasks; index1++) {
+            if (!empty_compound_tasks[index1]) {
+                //bool inPositive = find(poss_eff_positive[index1].begin(), poss_eff_positive[index1].end(), var) != poss_eff_positive[index1].end();
+                //bool inNegative = find(poss_eff_negative[index1].begin(), poss_eff_negative[index1].end(), var) != poss_eff_negative[index1].end();
+                bool inPositive = !poss_eff_positive[index1].empty() && poss_eff_positive[index1].back() == var;
+                bool inNegative = !poss_eff_negative[index1].empty() && poss_eff_negative[index1].back() == var;
+
+                if (inPositive && !inNegative) {
+                    eff_positive[index1].push_back(var);
+                }
+                if (!inPositive && inNegative) {
+                    eff_negative[index1].push_back(var);
+                }
+            }
+        }
+
+        // Step 7: Calculate possible effects of methods
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+            bool poss_pos = false;
+            bool poss_neg = false;
+            for(auto const& index2: tRem[index1]){
+            //for (int index2 = method_indexes[index1]; index2 < model->numSubTasks[index1]; index2++) {
+                int nextTaskInTN = model->subTasks[index1][index2];
+                //int nextTaskInTN = orderedSubTasks[index1][index2];
+                int compoundTaskIndex = nextTaskInTN - numActions;
+
+                if (compoundTaskIndex < 0 && available_actions[nextTaskInTN] == 1 && !poss_pos) {
+                    model->poss_pos_m[index1].push_back(var);
+                    poss_pos = true;
+                } else if (compoundTaskIndex < 0 && available_actions[nextTaskInTN] == -1 && !poss_neg) {
+                    model->poss_neg_m[index1].push_back(var);
+                    poss_neg = true;
+                } else if (compoundTaskIndex >= 0) {
+                    if (!poss_pos && (poss_eff_positive[compoundTaskIndex].empty() || poss_eff_positive[compoundTaskIndex].back() == var )){
+                        model->poss_pos_m[index1].push_back(var);
+                        poss_pos = true;
+                    }
+                    if (!poss_neg && (poss_eff_negative[compoundTaskIndex].empty() || poss_eff_negative[compoundTaskIndex].back() == var )){
+                        model->poss_neg_m[index1].push_back(var);
+                        poss_neg = true;
+                    }
+
+                }
+            }
+        }
+
+        // Step 8: Calculate guaranteed effects of methods
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+
+            // Test whether method can be empty
+            if (tRem[index1].size()==model->numSubTasks[index1]) {
+                bool emptyRef = true;
+                for (int index2 = 0; index2 < model->numFirstTasks[index1]; index2++) {
+                    int nextTaskInTN = model->subTasks[index1][index2];
+                    int compoundTaskIndex = nextTaskInTN - numActions;
+                    if (compoundTaskIndex < 0 && available_actions[nextTaskInTN] != 0) {
+                        emptyRef = false;
+                    } else if (compoundTaskIndex >= 0 && !empty_compound_tasks[compoundTaskIndex]) {
+                        emptyRef = false;
+                    }
+                }
+                if (emptyRef)
+                    continue;
+            }
+
+            bool inPositive = !model->poss_pos_m[index1].empty() && model->poss_pos_m[index1].back() == var;
+            bool inNegative = !model->poss_neg_m[index1].empty() && model->poss_neg_m[index1].back() == var;
+
+            if (inPositive && !inNegative) {
+                model->eff_pos_m[index1].push_back(var);
+            }
+            if (!inPositive && inNegative) {
+                model->eff_neg_m[index1].push_back(var);
+            }
+
+        }
+
+        delete[] adjacent;
+        delete[] available_actions;
+        delete[] empty_compound_tasks;
+        //delete[] method_indexes;
+
+        delete[] tRem;
+        delete[] tCheck;
     }
 
     void computeEffectsOfMethodVariable(Model* model, int var, vector<int>* poss_eff_positive, vector<int>* poss_eff_negative,
@@ -118,7 +358,7 @@ namespace progression {
 
 
 
-        // Step 3: Get the index of the most-right available primitive task or non-empty compound task
+        // Step 3: Get the index of the rightmost available primitive task or non-empty compound task
         int* method_indexes = new int[model->numMethods];
         for (int index1 = 0; index1 < model->numMethods; index1++) {
             int i = 0;
@@ -266,6 +506,255 @@ namespace progression {
         delete[] available_actions;
         delete[] empty_compound_tasks;
         delete[] method_indexes;
+    }
+
+    void computeRelaxedPOMethodPreconditions(Model* model, int var, vector<int>* preconditions, vector<int>* poss_preconditions,
+                                           int amount_compound_tasks, vector<vector<vector<bool>>> transSuccessors) {
+        int numActions = model->numActions;
+        bool** available_actions = new bool*[numActions];
+        for (int index = 0; index < numActions; index++) {
+            available_actions[index] = new bool[3] {false};
+        }
+
+        // Step 1: Determine in which lists a given variable is. 0 == PrecList; 1 == AddList; 2 == DelList
+        for (int index1 = 0; index1 < numActions; index1++) {
+            for (int index2 = 0; index2 < model->numPrecs[index1]; index2++) {
+                if (model->precLists[index1][index2] == var) {
+                    available_actions[index1][0] = true;
+                    break;
+                }
+            }
+            for (int index2 = 0; index2 < model->numAdds[index1]; index2++) {
+                if (model->addLists[index1][index2] == var) {
+                    available_actions[index1][1] = true;
+                    break;
+                }
+            }
+            for (int index2 = 0; index2 < model->numDels[index1]; index2++) {
+                if (model->delLists[index1][index2] == var) {
+                    available_actions[index1][2] = true;
+                    break;
+                }
+            }
+        }
+
+        // Step 2: Determine which compound task can lead to an empty refinement
+        bool* empty_compound_tasks_prec = new bool[amount_compound_tasks] {false};
+        bool* empty_compound_task_prec_add = new bool[amount_compound_tasks] {false};
+
+        bool new_empty_found_prec = true;
+        bool new_empty_found_prec_add = true;
+
+        while (new_empty_found_prec || new_empty_found_prec_add) {
+            new_empty_found_prec = false;
+            new_empty_found_prec_add = false;
+
+            int compound_task_index = 0;
+            bool is_empty_prec;
+            bool is_empty_prec_add;
+            bool skip_prec;
+            bool skip_prec_add;
+
+            for (int index1 = 0; index1 < model->numMethods; index1++) {
+                is_empty_prec = true;
+                is_empty_prec_add = true;
+                skip_prec = false;
+                skip_prec_add = false;
+                compound_task_index = model->decomposedTask[index1] - numActions;
+
+                if (empty_compound_tasks_prec[compound_task_index]) {
+                    skip_prec = true;
+                }
+                if (empty_compound_task_prec_add[compound_task_index]) {
+                    skip_prec_add = true;
+                }
+
+                if (!skip_prec) {
+                    for (int index2 = 0; index2 < model->numSubTasks[index1]; index2++) {
+                        int subTaskIndex = model->subTasks[index1][index2];
+                        //int subTaskIndex = orderedSubTasks[index1][index2];
+                        if ((subTaskIndex - numActions) < 0 && available_actions[subTaskIndex][0]) {
+                            is_empty_prec = false;
+                            break;
+                        }
+                        if ((subTaskIndex - numActions) >= 0 && !empty_compound_tasks_prec[subTaskIndex - numActions]) {
+                            is_empty_prec = false;
+                            break;
+                        }
+                    }
+
+                    if (is_empty_prec) {
+                        empty_compound_tasks_prec[compound_task_index] = true;
+                        new_empty_found_prec = true;
+                    }
+                }
+
+                if (!skip_prec_add) {
+                    for (int index2 = 0; index2 < model->numSubTasks[index1]; index2++) {
+                        int subTaskIndex = model->subTasks[index1][index2];
+                        //int subTaskIndex = orderedSubTasks[index1][index2];
+                        if ((subTaskIndex - numActions) < 0 && (available_actions[subTaskIndex][0] || available_actions[subTaskIndex][1])) {
+                            is_empty_prec_add = false;
+                            break;
+                        }
+                        if ((subTaskIndex - numActions) >= 0 && !empty_compound_task_prec_add[subTaskIndex - numActions]) {
+                            is_empty_prec_add = false;
+                            break;
+                        }
+                    }
+
+                    if (is_empty_prec_add) {
+                        empty_compound_task_prec_add [compound_task_index] = true;
+                        new_empty_found_prec_add = true;
+                    }
+                }
+            }
+        }
+
+        // Step 3: Get the index of the most-left available primitive task or non-empty compound task
+
+        vector<int>* tRem = new vector<int>[model->numMethods];
+        vector<int>* tCheck = new vector<int>[model->numMethods];
+
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+
+            //bool* has_successor = new bool[model->numSubTasks[index1]] {false};
+            //for (int o = 0; o < model->numOrderings[index1]; o+=2)
+            //    has_successor[model->ordering[index1][o]] = true;
+
+            for (int index2 = 0; index2 < model->numFirstTasks[index1]; index2++) {
+                tRem[index1].push_back(model->methodsFirstTasks[index1][index2]);
+                tCheck[index1].push_back(model->methodsFirstTasks[index1][index2]);
+            }
+
+            while (!tCheck[index1].empty()) {
+                int subTaskIndex = tCheck[index1].back();
+                int subTask = model->subTasks[index1][subTaskIndex] - numActions;
+                tCheck[index1].pop_back();
+                // if task admits empty refinement or is primitive but has no relevant prec or add
+                if ((subTask >= 0 && empty_compound_task_prec_add[subTask]) || (subTask < 0 && !available_actions[subTask + numActions][0] && !available_actions[subTask + numActions][1])) {
+                    // check successors
+                    for (int o = 0; o < model->numOrderings[index1]; o+=2) {
+                        if (model->ordering[index1][o] == subTaskIndex) {
+                            int sucTaskIndex = model->ordering[index1][o+1];
+                            // check whether relevant predecessor exists
+                            bool pred_exist = false;
+                            for (int i = 0; i < model->numSubTasks[index1]; i++) {
+                                if (transSuccessors[index1][i][sucTaskIndex] && find(tRem[index1].begin(), tRem[index1].end(), i) != tRem[index1].end()) {
+                                    // i is now a predecessor task and must be checked whether it is an empty one
+                                    int potentialPred = model->subTasks[index1][i];
+                                    if ( (potentialPred < numActions && (available_actions[potentialPred][0] || available_actions[potentialPred][1] )) || (potentialPred >= numActions && !empty_compound_task_prec_add[potentialPred-numActions]))
+                                        pred_exist = true;
+                                }
+
+                            }
+                            if (!pred_exist) {
+                                tRem[index1].push_back(model->ordering[index1][o+1]);
+                                tCheck[index1].push_back(model->ordering[index1][o+1]);
+                            }
+
+                        }
+
+                    }
+                }
+            }
+
+        }
+
+        // Step 5: Check whether a refinement of a compound task
+        // 1) requires var as precondition
+        // 2) adds var first
+        bool* c_needs_f = new bool[amount_compound_tasks] {false};
+        bool* c_adds_f = new bool[amount_compound_tasks] {false};
+
+        int newUpdate = true;
+        while (newUpdate) {
+            newUpdate = false;
+            for (int index1 = 0; index1 < model->numMethods; index1++) {
+                int decomposedTaskIndex = model->decomposedTask[index1] - numActions;
+                if (c_needs_f[decomposedTaskIndex] && c_adds_f[decomposedTaskIndex])
+                    continue;
+                for(auto const& index2: tRem[index1]) {
+                    int nextTaskInTN = model->subTasks[index1][index2];
+                    int c_task_index = nextTaskInTN - numActions;
+
+                    if (c_task_index < 0) {
+                        if (available_actions[nextTaskInTN][0] && !c_needs_f[decomposedTaskIndex]) {
+                            c_needs_f[decomposedTaskIndex]=true;
+                            newUpdate = true;
+                        }
+                        if (available_actions[nextTaskInTN][1] && !c_adds_f[decomposedTaskIndex]) {
+                            c_adds_f[decomposedTaskIndex] = true;
+                            newUpdate = true;
+                        }
+                        if (c_needs_f[decomposedTaskIndex] && c_adds_f[decomposedTaskIndex])
+                            break;
+                    } else {
+                        if (c_needs_f[c_task_index] && !c_needs_f[decomposedTaskIndex]) {
+                            c_needs_f[decomposedTaskIndex]=true;
+                            newUpdate = true;
+                        }
+                        if (c_adds_f[c_task_index] && !c_adds_f[decomposedTaskIndex]) {
+                            c_adds_f[decomposedTaskIndex] = true;
+                            newUpdate = true;
+                        }
+                        if (c_needs_f[decomposedTaskIndex] && c_adds_f[decomposedTaskIndex])
+                            break;
+                    }
+                }
+            }
+        }
+
+        // Bring information together
+        for (int i = 0; i < amount_compound_tasks; i++) {
+            if (c_needs_f[i]) {
+                poss_preconditions[i].push_back(var);
+                if (!c_adds_f[i] && !empty_compound_task_prec_add[i])
+                    preconditions[i].push_back(var);
+            }
+        }
+
+        // Calculate preconditions of methods
+        // 0 == PrecList; 1 == AddList; 2 == DelList
+
+        // ToDo: This calculates possible method preconditions insteas of guaranteed ones - fix
+        for (int index1 = 0; index1 < model->numMethods; index1++) {
+            for(auto const& index2: tRem[index1]){
+            //for (int index2 = 0; index2 <= method_indexes[index1]; index2++) {
+                int nextTaskInTN = model->subTasks[index1][index2];
+                //int nextTaskInTN = orderedSubTasks[index1][index2];
+                int compoundTaskIndex = nextTaskInTN - numActions;
+
+                if (compoundTaskIndex < 0 && available_actions[nextTaskInTN][0]) {
+                    model->prec_m[index1].push_back(var);
+                    break;
+                } else if (compoundTaskIndex < 0 && available_actions[nextTaskInTN][1]) {
+                    break;
+                } else if (compoundTaskIndex >= 0 && !preconditions[compoundTaskIndex].empty() && preconditions[compoundTaskIndex].back() == var) {
+                    model->prec_m[index1].push_back(var);
+                    break;
+                } else if (compoundTaskIndex >= 0 && c_adds_f[compoundTaskIndex]) {
+                    break;
+
+                }
+            }
+        }
+
+        for (int i = 0; i < numActions; i++) {
+            delete[] available_actions[i];
+        }
+        delete[] available_actions;
+        delete[] empty_compound_tasks_prec;
+        delete[] empty_compound_task_prec_add;
+        //delete[] method_indexes;
+        delete[] c_adds_f;
+        delete[] c_needs_f;
+        //delete[] prec_of_c_tasks;
+        //delete[] c_produces_f_first;
+        delete[] tRem;
+        delete[] tCheck;
+
+
     }
 
 
@@ -610,16 +1099,44 @@ namespace progression {
         }
     }
 
+    vector<vector<vector<bool>>> calculateTransitiveClosure(Model* model) {
+
+        vector<vector<vector<bool>>> trans (model->numMethods);
+        //auto trans = new vector<bool> **[model->numMethods];
+
+        for (int i = 0; i < model->numMethods; i++) {
+            trans[i] = vector<vector<bool>>(model->numSubTasks[i]);
+
+            for (int x = 0; x < model->numSubTasks[i]; x++)
+                for (int y = 0; y < model->numSubTasks[i]; y++)
+                    trans[i][x].push_back(false);
+
+
+            for (int o = 0; o < model->numOrderings[i]; o+=2)
+                trans[i][model->ordering[i][o]][model->ordering[i][o+1]] = true;
+
+            // warshall algorithm to calculate transitive closure
+            for (int k = 0; k < model->numSubTasks[i]; k++)
+                for (int x = 0; x < model->numSubTasks[i]; x++)
+                    for (int y = 0; y < model->numSubTasks[i]; y++)
+                        if (trans[i][x][k] && trans[i][k][y]) trans[i][x][y] = true;
+        }
+        return trans;
+
+    }
+
     void printResults(Model* model, vector<int>* preconditions, vector<int>* poss_eff_positive, vector<int>* eff_positive,
                       vector<int>* poss_eff_negative, vector<int>* eff_negative, int amount_compound_tasks) {
         int numActions = model->numActions;
 
-        ofstream File("results/result_prec_eff.txt");
+        ofstream File("result_prec_eff.txt");
 
         for (int index = 0; index < amount_compound_tasks; index++) {
             File << model->taskNames[numActions + index] << endl;
             File << "=== Preconditions === " << endl;
             printElementWithName(model, preconditions[index], File);
+            File << "=== Possible Preconditions === " << endl;
+            printElementWithName(model, model->poss_preconditions[index], File);
             File << "=== Possible positive effects ===" << endl;
             printElementWithName(model, poss_eff_positive[index], File);
             File << "=== Possible negative effects ===" << endl;
