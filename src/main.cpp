@@ -10,8 +10,15 @@ void write_action(ofstream &fOut, int i, Model *htn);
 int main(int argc, char** argv) {
     string file_path = argv[1];
     Model *htn = setup_model(file_path);
+    for (int m =0; m < htn->numMethods; m++) {
+        if (!htn->isMethodTotallyOrdered(m)) {
+            cout << "Method " << m << " is not TO: " << htn->methodNames[m] << endl;
+        }
+    }
     ofstream o;
-    ComplexInference(htn, false, o, true);
+    // Choose between type: random, simple or complex
+    Linearize(htn, "complex", false, o);
+    //ComplexInference(htn, false, o, true);
     htn->generateMethodRepresentation();
     string outFile = argv[2];
     write_sas(outFile, htn);

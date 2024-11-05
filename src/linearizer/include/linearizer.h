@@ -1,6 +1,6 @@
 //============================================================================
 // Name        : Main.cpp
-// Author      : Ying Xian Wu
+// Author      : Ying Xian Wu and Conny Olz
 // Version     :
 // Copyright   :
 // Description : Naive algorithm for linearising a domain given problem in .sas file
@@ -52,23 +52,19 @@ progression::Model *setup_model(string fileName)
 }
 
 
-void get_mentioned(Model* model, bool*** all_pre_eff)
-{
+void get_mentioned(Model* model, bool*** all_pre_eff) {
        for (int mIndex = 0; mIndex < model->numMethods; mIndex++) {
               for (int tIndex = 0; tIndex < model->numSubTasks[mIndex]; tIndex++) {
                      int task = model->subTasks[mIndex][tIndex];
                      if (task >= model->numActions)
                             continue;
-                     for (int i = 0; i < model->numPrecs[task]; i++)
-                     {
+                     for (int i = 0; i < model->numPrecs[task]; i++) {
                             all_pre_eff[0][model->decomposedTask[mIndex]][model->precLists[task][i]] = true;
                      }
-                     for (int i = 0; i < model->numAdds[task]; i++)
-                     {
+                     for (int i = 0; i < model->numAdds[task]; i++) {
                             all_pre_eff[1][model->decomposedTask[mIndex]][model->addLists[task][i]] = true;
                      }
-                     for (int i = 0; i < model->numDels[task]; i++)
-                     {
+                     for (int i = 0; i < model->numDels[task]; i++) {
                             all_pre_eff[2][model->decomposedTask[mIndex]][model->delLists[task][i]] = true;
                      }
               }
@@ -78,26 +74,418 @@ void get_mentioned(Model* model, bool*** all_pre_eff)
               c_updated.push_back(c);
        }
 
-       while (!c_updated.empty()){
+       while (!c_updated.empty()) {
               int task = c_updated.back();
               c_updated.pop_back();
-              for (int m = 0; m < model->stToMethodNum[task]; m++) {  // mapping from task to methods it is contained as subtasks
-                     int decomposed_task = model->stToMethod[m][task];
-                     for (int var = 0; var < model->numVars; var++)
-                     {
+              for (int mi = 0; mi < model->stToMethodNum[task]; mi++) {
+                     // mapping from task to methods it is contained as subtasks
+                     int method = model->stToMethod[task][mi];
+                     int decomposed_task = model->decomposedTask[method];
+                     for (int var = 0; var < model->numVars; var++) {
                             if ((!all_pre_eff[0][decomposed_task][var] && all_pre_eff[0][task][var]) ||
                                    (!all_pre_eff[1][decomposed_task][var] && all_pre_eff[1][task][var]) ||
                                    (!all_pre_eff[2][decomposed_task][var] && all_pre_eff[2][task][var]))
                                    c_updated.push_back(decomposed_task);
-                            all_pre_eff[0][decomposed_task][var] = all_pre_eff[0][decomposed_task][var] || all_pre_eff[0][task][var];
-                            all_pre_eff[1][decomposed_task][var] = all_pre_eff[1][decomposed_task][var] || all_pre_eff[1][task][var];
-                            all_pre_eff[2][decomposed_task][var] = all_pre_eff[2][decomposed_task][var] || all_pre_eff[2][task][var];
+                            all_pre_eff[0][decomposed_task][var] = all_pre_eff[0][decomposed_task][var] || all_pre_eff[
+                                   0][task][var];
+                            all_pre_eff[1][decomposed_task][var] = all_pre_eff[1][decomposed_task][var] || all_pre_eff[
+                                   1][task][var];
+                            all_pre_eff[2][decomposed_task][var] = all_pre_eff[2][decomposed_task][var] || all_pre_eff[
+                                   2][task][var];
+                     }
+              }
+       }
+}
+
+void getConnysPrecEffs(Model* model, bool*** all_pre_eff) {
+
+       int num_compound_tasks = model->numTasks-model->numActions;
+       model->initializeCompoundTasks();
+
+       for (int t = 0; t < num_compound_tasks; t++) {
+              for (unsigned long int i = 0; i < model->poss_preconditions[t].size(); i++) { // prec
+                     int prec = model->poss_preconditions[t][i];
+                     all_pre_eff[0][t][prec] = true;
+              }
+              for (unsigned long int i = 0; i < model->poss_eff_positive[t].size(); i++) { // add
+                     int add = model->poss_eff_positive[t][i];
+                     all_pre_eff[1][t][add] = true;
+              }
+              for (unsigned long int i = 0; i < model->poss_eff_negative[t].size(); i++) { // del
+                     int del = model->poss_eff_negative[t][i];
+                     all_pre_eff[2][t][del] = true;
+              }
+       }
+
+
+
+       /*cout << "Calculating preconditions and effects of compound tasks... " << endl;
+       model->buildOrderingDatastructures();
+       int amount_compound_tasks = model->numTasks-model->numActions;
+
+       m->poss_eff_positive = new vector<int>[amount_compound_tasks];
+       m->poss_eff_negative = new vector<int>[amount_compound_tasks];
+       m->eff_positive = new vector<int>[amount_compound_tasks];
+       m->eff_negative = new vector<int>[amount_compound_tasks];
+       m->preconditions = new vector<int>[amount_compound_tasks];
+       m->poss_preconditions = new vector<int>[amount_compound_tasks];
+
+       m->poss_pos_m = new vector<int>[m->numMethods];
+       m->poss_neg_m = new vector<int>[m->numMethods];
+       m->eff_pos_m = new vector<int>[m->numMethods];
+       m->eff_neg_m = new vector<int>[m->numMethods];
+       m->prec_m = new vector<int>[m->numMethods];
+
+       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, m->poss_preconditions, amount_compound_tasks);
+       // END: Compute effects*/
+}
+
+void addOrderings(Model* model, int method, bool*** tasks_pre_eff, vector<std::vector<bool>>& orderings) {
+       // consider one subtasks
+       for (int index1 = 0; index1 < model->numSubTasks[method]; index1++) {
+              int subtask1 = model->subTasks[method][index1];
+
+              //// * For each precondition v of subtask1
+              for (int v = 0; v < model->numStateBits; v++) {
+                     if (tasks_pre_eff[0][subtask1][v]) {
+                            // compared to other subtasks in that method
+                            for (int index2 = 0; index2 < model->numSubTasks[method]; index2++) {
+                                   if (index1 != index2) { // not against yourself
+
+                                          int subtask2 = model->subTasks[method][index2];
+                                          // move all other subtasks with add effect v in front of task1
+                                          if (tasks_pre_eff[1][subtask2][v]) {
+                                                 orderings[index2][index1] = true;
+                                          }
+                                          //  and all other subtasks with a delete effect behind it.
+                                          if (tasks_pre_eff[2][subtask2][v]) {
+                                                 orderings[index1][index2] = true;
+                                          }
+                                   }
+                            }
+                     }
+              }
+       } // return orderings;
+}
+
+void getTotalOrder(int numSubTasks, vector<std::vector<bool>>& orderings, vector<int>& totalOrder) {
+
+       if (numSubTasks == 1) {
+              totalOrder.push_back(0);
+              return;
+       }
+
+       // Build adjacency list with ordering constraints
+       map<int, std::unordered_set<int>> adj;
+
+       for (int i = 0; i < numSubTasks; i++) {
+              for (int j = 0; j < numSubTasks; j++) {
+                     if (i != j && orderings[i][j])
+                            adj[i].insert(j);
+              }
+       }
+
+       // Kahn's algorithm:
+       // Repeatedly find nodes with no incoming edges, remove them from the graph, and update the incoming edges of the remaining nodes
+       vector<int> inDegree(numSubTasks, 0);
+       for (const auto& [u, neighbors] : adj) {
+              for (int v : neighbors) {
+                     inDegree[v]++;
+              }
+       }
+
+       vector<int> zeroInDegree;
+       for (int i = 0; i < numSubTasks; ++i) {
+              if (inDegree[i] == 0) {
+                     zeroInDegree.push_back(i);
+              }
+       }
+
+       int pos = 0;
+       while (!zeroInDegree.empty()) {
+              int node = zeroInDegree.back();
+              zeroInDegree.pop_back();
+              totalOrder[pos++] = node;
+
+              for (const int& neighbor : adj[node]) {
+                     if (--inDegree[neighbor] == 0) {
+                            zeroInDegree.push_back(neighbor);
+                     }
+              }
+       }
+}
+
+// returns true if there are cycles left
+// returns false if orderings are acyclic
+bool getCyclicPart(int numSubTasks, vector<int>& inDegree, vector<int>& outDegree, vector<bool>& notOnCycle, vector<std::vector<bool>>& orderings) {
+
+       queue<int> zeroInDegree;
+       queue<int> zeroOutDegree;
+
+       for (int i = 0; i < numSubTasks; ++i) {
+              if (inDegree[i] == 0) {
+                     zeroInDegree.push(i);
+              }
+              if (outDegree[i] == 0 && inDegree[i] != 0) {
+                     zeroOutDegree.push(i);
+              }
+       }
+       while (!zeroInDegree.empty() || !zeroOutDegree.empty()) {
+              if (!zeroInDegree.empty()) {
+                     int node = zeroInDegree.front();
+                     zeroInDegree.pop();
+                     if (!notOnCycle[node]) {
+                            notOnCycle[node] = true;
+                            cout << "Not on cycle: " << node << endl;
+                            for (int i = 0; i < numSubTasks; i++) {
+                                   if (i != node && orderings[node][i]) {
+                                          inDegree[i]--;
+                                          if (inDegree[i] == 0) {
+                                                 zeroInDegree.push(i);
+                                          }
+                                   }
+                            }
+                     }
+              }
+              else if (!zeroOutDegree.empty()) {
+                     int node = zeroOutDegree.front();
+                     zeroOutDegree.pop();
+                     if (!notOnCycle[node]) {
+                            notOnCycle[node] = true;
+                            cout << "Not on cycle: " << node << endl;
+                            for (int i = 0; i < numSubTasks; i++) {
+                                   if (i != node && orderings[i][node]) {
+                                          outDegree[i]--;
+                                          if (outDegree[i] == 0) {
+                                                 zeroOutDegree.push(i);
+                                          }
+                                   }
+                            }
+                     }
+              }
+       }
+       for (int i = 0; i < numSubTasks; i++) {
+              if (notOnCycle[i] == false)
+                     return true;
+       }
+       return false;
+}
+
+void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_eff, vector<std::vector<bool>>& orderings, vector<int>& totalOrder) {
+       int numSubTasks = model->numSubTasks[method];
+
+       cout << "Method " << method << endl;
+
+       for (int t = 0; t < numSubTasks; t++) {
+              for (int i = 0; i < numSubTasks; i++) {
+                     if (orderings[t][i])
+                            cout << t << " < " << i << endl;
+              }
+       }
+
+       // Build adjacency matrix of original ordering (we must keep these edges)
+       vector<vector<bool>> keepEdge(numSubTasks, vector<bool>(numSubTasks,false));
+
+       for (int i = 0; i < model->numOrderings[method]; i += 2) {
+              keepEdge[model->ordering[method][i]][model->ordering[method][i+1]]=true;
+              orderings[model->ordering[method][i]][model->ordering[method][i+1]] = true;
+              cout << "Keep " << model->ordering[method][i] << " " << model->ordering[method][i+1] << endl;
+       }
+
+       // Step 1: Build adjacency list and in-degrees/out-degrees for cyclic graph
+       vector<int> inDegree(numSubTasks, 0);
+       vector<int> outDegree(numSubTasks, 0);
+
+       for (int i = 0; i < numSubTasks; ++i) {
+              for (int j = 0; j < numSubTasks; ++j) {
+                     if (orderings[i][j]) {
+                            inDegree[j]++;
+                            outDegree[i]++;
                      }
               }
        }
 
+       // Step 2: Remove cycles to form a DAG
+       // Use adaption of Kahn's algorithm to find the acyclic part: Consider nodes with either no incoming or outgoing edge and remove. Update degrees of remaining nodes.
+       vector<bool> notOnCycle(numSubTasks, false);
+
+       bool isCyclic = getCyclicPart(numSubTasks, inDegree, outDegree, notOnCycle, orderings);
+
+       // Step 3: If orderings are cyclic, remove cycles
+
+       if (isCyclic) {
+              for (int node = 0; node < numSubTasks; node++) {
+                     bool outerBreak = false;
+                     if (notOnCycle[node])
+                            continue;
+                     for (int neighbor = 0; neighbor < numSubTasks; neighbor++) {
+                            if (node == neighbor || keepEdge[node][neighbor] || notOnCycle[neighbor] || orderings[node][neighbor]==false)
+                                   continue;
+                            orderings[node][neighbor]=false;
+                            inDegree[neighbor]--;
+                            outDegree[node]--;
+                            cout << "Removed edge " << node << " < " << neighbor << endl;
+                            isCyclic = getCyclicPart(numSubTasks, inDegree, outDegree, notOnCycle, orderings);
+                            if (!isCyclic) {
+                                   outerBreak = true;
+                                   break;
+                            }
+                     }
+                     if (outerBreak)
+                            break;
+              }
+       }
+
+       cout << "After removing cycles: " << endl;
+       for (int t = 0; t < numSubTasks; t++) {
+              for (int i = 0; i < numSubTasks; i++) {
+                     if (orderings[t][i])
+                            cout << t << " < " << i << endl;
+              }
+       }
+
+       getTotalOrder(numSubTasks, orderings, totalOrder);
 }
 
+void getRandomTotalOrder(Model* model, int method, vector<int>& totalOrder) {
+       int numSubTasks = model->numSubTasks[method];
+
+       if (numSubTasks == 1) {
+              totalOrder.push_back(0);
+              return;
+       }
+
+       // Build adjacency list with ordering constraints
+       map<int, std::unordered_set<int>> adj;
+
+       for (int i = 0; i < model->numOrderings[method]; i += 2) {
+              int from = model->ordering[method][i];
+              int to = model->ordering[method][i+1];
+              adj[from].insert(to);
+       }
+
+       // Kahn's algorithm:
+       // Repeatedly find nodes with no incoming edges, remove them from the graph, and update the incoming edges of the remaining nodes
+       vector<int> inDegree(numSubTasks, 0);
+       for (const auto& [u, neighbors] : adj) {
+              for (int v : neighbors) {
+                     inDegree[v]++;
+              }
+       }
+
+       // Random number generator
+       random_device rd;
+       default_random_engine rng(rd());
+
+       vector<int> zeroInDegree;
+       for (int i = 0; i < numSubTasks; ++i) {
+              if (inDegree[i] == 0) {
+                     zeroInDegree.push_back(i);
+              }
+       }
+
+       int pos = 0;
+       while (!zeroInDegree.empty()) {
+              shuffle(zeroInDegree.begin(), zeroInDegree.end(), rng);
+              int node = zeroInDegree.back();
+              zeroInDegree.pop_back();
+              totalOrder[pos++] = node;
+
+              for (const int& neighbor : adj[node]) {
+                     if (--inDegree[neighbor] == 0) {
+                            zeroInDegree.push_back(neighbor);
+                     }
+              }
+       }
+}
+
+void overwriteOrdering(Model* model, int method, vector<int>& totalOrder) {
+       int numSubTasks = model->numSubTasks[method];
+       // Step 1: Delete the old ordering array for this method
+       delete[] model->ordering[method];
+
+       // Step 2: Allocate new space for the ordering
+       model->numOrderings[method] = (numSubTasks - 1) * 2;  // Each `from-to` requires two entries
+       model->ordering[method] = new int[model->numOrderings[method]];
+
+       // Step 3: Fill in the new ordering based on `totalOrder`
+       for (int i = 0; i < numSubTasks - 1; ++i) {
+              model->ordering[method][i * 2] = totalOrder[i];       // `from`
+              model->ordering[method][i * 2 + 1] = totalOrder[i + 1]; // `to`
+       }
+}
+
+void Linearize(Model* model, const string& inference_type, bool collect_statistics, ofstream& o) {
+
+       assert(inference_type == "random" || inference_type == "simple" || inference_type == "complex");
+
+       if (inference_type == "random") {
+
+              for (int method = 0; method < model->numMethods; method++) {
+                     if (model->isMethodTotallyOrdered(method))
+                            continue;
+
+                     vector<int> totalOrder(model->numSubTasks[method]);
+                     getRandomTotalOrder(model, method, totalOrder);
+                     overwriteOrdering(model, method, totalOrder);
+              }
+
+       // simple or complex
+       } else {
+              // set up storage of inferred precs and effs
+              bool*** all_pre_eff = new bool**[3]; // [3][numTasks][numStateBits]
+              for (int i = 0; i < 3; i++) {
+                     all_pre_eff[i] = new bool*[model->numTasks];
+                     for (int t = 0; t < model->numTasks; t++) {
+                            all_pre_eff[i][t] = new bool[model->numStateBits]{false};
+
+                            if (t < model->numActions) {
+                                   for (int v = 0; v < model->numPrecs[t]; v++)
+                                          all_pre_eff[0][t][model->precLists[t][v]] = true;
+                                   for (int v = 0; v < model->numAdds[t]; v++)
+                                          all_pre_eff[0][t][model->addLists[t][v]] = true;
+                                   for (int v = 0; v < model->numDels[t]; v++)
+                                          all_pre_eff[0][t][model->delLists[t][v]] = true;
+                            }
+                     }
+              }
+
+              if (inference_type == "simple") {
+                     get_mentioned(model, all_pre_eff);
+              }
+              else {
+                     getConnysPrecEffs(model, all_pre_eff);
+              }
+
+              for (int method = 0; method < model->numMethods; method++) {
+                     if (model->isMethodTotallyOrdered(method))
+                            continue;
+                     // set up storage of orderings
+                     int numSubTasks = model->numSubTasks[method];
+                     vector<int> totalOrder(numSubTasks);
+                     vector<std::vector<bool>> orderings(numSubTasks, vector<bool>(numSubTasks, false));
+
+                     addOrderings(model, method, all_pre_eff, orderings);
+                     removeCyclesAndGetTotalOrder(model, method, all_pre_eff, orderings, totalOrder);
+                     overwriteOrdering(model, method, totalOrder);
+              }
+
+
+              // deallocate memory
+              for (int i = 0; i < 3; i++) {
+                     for (int t = 0; t < model->numTasks; t++) {
+                            delete all_pre_eff[i][t];
+                     }
+                     delete[] all_pre_eff[i];
+              }
+              delete[] all_pre_eff;
+       } // found orderings
+
+}
+
+
+// Ying's Code
+/*
 void get_t_pre_eff_(int collect_to_task, int task_to_explore, bool *visited, bool ***all_pre_eff, Model *m, ofstream &o)
 {
        if (!(visited[task_to_explore]))
@@ -282,7 +670,7 @@ bool generate_total_ordering_(Model *m, int method, bool ***old_orderings, bool 
        }
        return needed_cycle_break;
 }
- 
+
 int generate_total_ordering(Model *m, bool ***old_orderings, bool ***linearised_orderings, ofstream &o)
 {
        int i = 0;
@@ -295,7 +683,7 @@ int generate_total_ordering(Model *m, bool ***old_orderings, bool ***linearised_
               }
        }
        return i;
-} 
+}
 // only linearisees methods that didn't need cycle breaking, otherwise leaves it alone
 int generate_total_ordering_where_possible(Model *m, bool ***old_orderings, bool ***linearised_orderings, bool *needs_breaking, ofstream &o)
 {
@@ -507,14 +895,15 @@ void transform(int num_compound_tasks, vector<int> *poss_eff_positive, vector<in
               }                         
        }
 }
+*/
 
 
-void ComplexTopLevelLinearization(Model * m, string domain_out_name, string problem_out_name, bool collect_statistics, ofstream& o) {
+/*void ComplexTopLevelLinearization(Model * m, string domain_out_name, string problem_out_name, bool collect_statistics, ofstream& o) {
     //   bool ***linearised_orderings, bool * needed_break) {
        auto start_all = std::chrono::high_resolution_clock::now();
        float timings[10];
 
-       /*************************** CONNY's (was in Model.cpp) *******************************/
+       /*************************** CONNY's (was in Model.cpp) ******************************#1#
        // BEGIN: Compute possible effects. Just for dev reason i am using var = 0 (first state variable)
        cout << "Calculating preconditions and effects of compound tasks... " << endl;
        (*m).buildOrderingDatastructures();
@@ -570,19 +959,19 @@ void ComplexTopLevelLinearization(Model * m, string domain_out_name, string prob
                      orderings_per_method[method][i] = new bool[(*m).numSubTasks[method]]{0};
               }
        }
-              
+
        auto stop = std::chrono::high_resolution_clock::now();
        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start_all);
        float d = static_cast<float>(duration.count()) / 1000000.0;
        timings[0] = d; // time taken for complex inference of variables
-       
+
        // printf("Before linearization of top method\n");
        // test(m, 0, 20);
 
-       //find_orderings(m, all_pre_eff, orderings_per_method, o); 
-       int method = 0;       
+       //find_orderings(m, all_pre_eff, orderings_per_method, o);
+       int method = 0;
        find_orderings_(m, method, all_pre_eff, orderings_per_method, o);
-       
+
        // delete storage
        T = (*m).numTasks;
        V = (*m).numStateBits;
@@ -615,7 +1004,7 @@ void ComplexTopLevelLinearization(Model * m, string domain_out_name, string prob
        }
        bool init_needed_break = generate_total_ordering_(m, method, orderings_per_method, linearised_orderings, o);
 
-       /////////////////////////////////////// make_linearised_model_where_toplevel_method     
+       /////////////////////////////////////// make_linearised_model_where_toplevel_method
        delete (*m).ordering[method];
        std::vector<int> orderings_vec; // for this method
        for (int i = 0; i < (*m).numSubTasks[method]; i++)
@@ -629,7 +1018,7 @@ void ComplexTopLevelLinearization(Model * m, string domain_out_name, string prob
                      }
               }
        }
-       
+
        (*m).numOrderings[method] = orderings_vec.size();           // new size of ordering
        (*m).ordering[method] = new int[(*m).numOrderings[method]]; // new ordering array
        for (unsigned long int i = 0; i < orderings_vec.size(); i++)
@@ -649,7 +1038,7 @@ void ComplexTopLevelLinearization(Model * m, string domain_out_name, string prob
        delete[] orderings_per_method;
 
 
-       /* test after */
+       /* test after #1#
        // printf("\nAfter linearizing top level method\n");
        // test(m, 0, 20);
        printf("Top-level needed breaking %i \n", init_needed_break);
@@ -767,7 +1156,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        auto start = std::chrono::high_resolution_clock::now();
        float timings[10];
 
-       /*************************** CONNY's (was in Model.cpp) *******************************/
+       /*************************** CONNY's (was in Model.cpp) ******************************#1#
        // BEGIN: Compute possible effects.
        cout << "Calculating preconditions and effects of compound tasks... " << endl;
        (*m).buildOrderingDatastructures();
@@ -858,7 +1247,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
               }
        }
        bool *needed_break = new bool[(*m).numMethods];
-       
+
        bool init_needed_break;
        if (o.is_open())
               init_needed_break = generate_total_ordering_(m, 0, orderings_per_method, linearised_orderings, o);
@@ -885,10 +1274,10 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        // return (linearised_orderings, needed_break);
        if (linearize_all) {
               make_linearized_model(m, linearised_orderings, o);
-       } else {    
+       } else {
               make_linearized_model_where_possible(m, linearised_orderings, needed_break, o);
        }
-       /* test after */
+       /* test after #1#
        // printf("Conny's algorithm 1");
        //  printf("\nAfter\n");
        // test(m, 0, 20);
@@ -910,12 +1299,12 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
        duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
        d = static_cast<float>(duration.count()) / 1000000.0;
        timings[2] = d;
-       
+
        auto stop_all = std::chrono::high_resolution_clock::now();
        duration = std::chrono::duration_cast<std::chrono::microseconds>(stop_all - start_all);
        d = static_cast<float>(duration.count()) / 1000000.0;
        timings[4] = d;
-        
+
        // m->writeToPDDL(domain_out_name, problem_out_name);
 
        // collect statistics
@@ -925,7 +1314,7 @@ void ComplexInference(Model * m, bool collect_statistics, ofstream& o,  bool lin
 }
 
 
-/************************************** GREGORS **********************************/
+/************************************** GREGORS *********************************#1#
 void SimpleInference(Model * m, string domain_out_name, string problem_out_name, bool collect_statistics, ofstream& o, bool linearize_all=true) {
        // get preconditions and effects
        auto start_all = std::chrono::high_resolution_clock::now();
@@ -944,7 +1333,7 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
               }
        }
 
-       /* test before */
+       /* test before #1#
        // printf("\nBefore: \n");
        // test(m, 0, 20);
 
@@ -1005,7 +1394,7 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
 
        // // get linearised orderings
        // set up storage
-       bool ***linearised_orderings = new bool **[(*m).numMethods]; 
+       bool ***linearised_orderings = new bool **[(*m).numMethods];
        for (int method = 0; method < (*m).numMethods; method++)
        {
               linearised_orderings[method] = new bool *[(*m).numSubTasks[method]];
@@ -1022,7 +1411,7 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
 
        start = std::chrono::high_resolution_clock::now();
        int methods_broken;
-       if (linearize_all) {        
+       if (linearize_all) {
               methods_broken = generate_total_ordering(m, orderings_per_method, linearised_orderings, o); // get
        } else {
               methods_broken = generate_total_ordering_where_possible(m, orderings_per_method, linearised_orderings, needed_break, o); // get
@@ -1046,7 +1435,7 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
               make_linearized_model_where_possible(m, linearised_orderings, needed_break, o);
        }
 
-       /* test after */
+       /* test after #1#
        // printf("\nAfter\n");
        // test(m, 0, 20);
        printf("Methods broken %i \n", methods_broken);
@@ -1079,7 +1468,7 @@ void SimpleInference(Model * m, string domain_out_name, string problem_out_name,
        if (collect_statistics) {
               collect_statistics_(m, timings, o, init_needed_break, methods_broken);
        }
-}
+}*/
 
 
 // int main(int argc, char *argv[])
