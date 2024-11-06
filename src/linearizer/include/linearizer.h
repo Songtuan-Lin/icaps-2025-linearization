@@ -103,7 +103,7 @@ void getConnysPrecEffs(Model* model, bool*** all_pre_eff) {
        model->initializeCompoundTasks();
 
        for (int t = 0; t < num_compound_tasks; t++) {
-              for (unsigned long int i = 0; i < model->poss_preconditions[t].size(); i++) { // prec
+              for (unsigned long int i = 0; i < model->poss_preconditions[t].size(); i++) { // possible prec
                      int prec = model->poss_preconditions[t][i];
                      all_pre_eff[0][t][prec] = true;
               }
@@ -115,32 +115,14 @@ void getConnysPrecEffs(Model* model, bool*** all_pre_eff) {
                      int del = model->poss_eff_negative[t][i];
                      all_pre_eff[2][t][del] = true;
               }
+              for (unsigned long int i = 0; i < model->preconditions[t].size(); i++) { // guaranteed prec
+                     int prec = model->preconditions[t][i];
+                     all_pre_eff[3][t][prec] = true;
+              }
        }
-
-
-
-       /*cout << "Calculating preconditions and effects of compound tasks... " << endl;
-       model->buildOrderingDatastructures();
-       int amount_compound_tasks = model->numTasks-model->numActions;
-
-       m->poss_eff_positive = new vector<int>[amount_compound_tasks];
-       m->poss_eff_negative = new vector<int>[amount_compound_tasks];
-       m->eff_positive = new vector<int>[amount_compound_tasks];
-       m->eff_negative = new vector<int>[amount_compound_tasks];
-       m->preconditions = new vector<int>[amount_compound_tasks];
-       m->poss_preconditions = new vector<int>[amount_compound_tasks];
-
-       m->poss_pos_m = new vector<int>[m->numMethods];
-       m->poss_neg_m = new vector<int>[m->numMethods];
-       m->eff_pos_m = new vector<int>[m->numMethods];
-       m->eff_neg_m = new vector<int>[m->numMethods];
-       m->prec_m = new vector<int>[m->numMethods];
-
-       progression::computeEffectsAndPreconditions(m, m->poss_eff_positive, m->poss_eff_negative, m->eff_positive, m->eff_negative, m->preconditions, m->poss_preconditions, amount_compound_tasks);
-       // END: Compute effects*/
 }
 
-void addOrderings(Model* model, int method, bool*** tasks_pre_eff, vector<std::vector<bool>>& orderings) {
+void addOrderings(Model* model, int method, bool*** tasks_pre_eff, vector<std::vector<bool>>& orderings, vector<std::vector<bool>>& prioOrderings) {
        // consider one subtasks
        for (int index1 = 0; index1 < model->numSubTasks[method]; index1++) {
               int subtask1 = model->subTasks[method][index1];
@@ -156,10 +138,14 @@ void addOrderings(Model* model, int method, bool*** tasks_pre_eff, vector<std::v
                                           // move all other subtasks with add effect v in front of task1
                                           if (tasks_pre_eff[1][subtask2][v]) {
                                                  orderings[index2][index1] = true;
+                                                 if (tasks_pre_eff[3][subtask1][v]) // if v is a guaranteed precondition, this edge becomes priority
+                                                        prioOrderings[index2][index1] = true;
                                           }
                                           //  and all other subtasks with a delete effect behind it.
                                           if (tasks_pre_eff[2][subtask2][v]) {
                                                  orderings[index1][index2] = true;
+                                                 if (tasks_pre_eff[3][subtask1][v]) // if v is a guaranteed precondition, this edge becomes priority
+                                                        prioOrderings[index1][index2] = true;
                                           }
                                    }
                             }
@@ -236,7 +222,7 @@ bool getCyclicPart(int numSubTasks, vector<int>& inDegree, vector<int>& outDegre
                      zeroInDegree.pop();
                      if (!notOnCycle[node]) {
                             notOnCycle[node] = true;
-                            cout << "Not on cycle: " << node << endl;
+                            // cout << "Not on cycle: " << node << endl;
                             for (int i = 0; i < numSubTasks; i++) {
                                    if (i != node && orderings[node][i]) {
                                           inDegree[i]--;
@@ -252,7 +238,7 @@ bool getCyclicPart(int numSubTasks, vector<int>& inDegree, vector<int>& outDegre
                      zeroOutDegree.pop();
                      if (!notOnCycle[node]) {
                             notOnCycle[node] = true;
-                            cout << "Not on cycle: " << node << endl;
+                            // cout << "Not on cycle: " << node << endl;
                             for (int i = 0; i < numSubTasks; i++) {
                                    if (i != node && orderings[i][node]) {
                                           outDegree[i]--;
@@ -271,10 +257,17 @@ bool getCyclicPart(int numSubTasks, vector<int>& inDegree, vector<int>& outDegre
        return false;
 }
 
-void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_eff, vector<std::vector<bool>>& orderings, vector<int>& totalOrder) {
+bool removeCyclesAndGetTotalOrder(Model* model, int method, vector<std::vector<bool>>& orderings, vector<std::vector<bool>>& prioOrderings, vector<int>& totalOrder) {
        int numSubTasks = model->numSubTasks[method];
+       bool cycleBroken = false;
 
-       cout << "Method " << method << endl;
+       /*
+       cout << "Method " << method << " " << model->methodNames[method] << endl;
+       cout << "Tasks: ";
+       for (int t = 0; t < numSubTasks; t++) {
+              cout << model->taskNames[t] << ", ";
+       } cout << endl;
+
 
        for (int t = 0; t < numSubTasks; t++) {
               for (int i = 0; i < numSubTasks; i++) {
@@ -282,6 +275,7 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
                             cout << t << " < " << i << endl;
               }
        }
+       */
 
        // Build adjacency matrix of original ordering (we must keep these edges)
        vector<vector<bool>> keepEdge(numSubTasks, vector<bool>(numSubTasks,false));
@@ -289,7 +283,7 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
        for (int i = 0; i < model->numOrderings[method]; i += 2) {
               keepEdge[model->ordering[method][i]][model->ordering[method][i+1]]=true;
               orderings[model->ordering[method][i]][model->ordering[method][i+1]] = true;
-              cout << "Keep " << model->ordering[method][i] << " " << model->ordering[method][i+1] << endl;
+              // cout << "Keep " << model->ordering[method][i] << " " << model->ordering[method][i+1] << endl;
        }
 
        // Step 1: Build adjacency list and in-degrees/out-degrees for cyclic graph
@@ -313,7 +307,9 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
 
        // Step 3: If orderings are cyclic, remove cycles
 
-       if (isCyclic) {
+       bool noPrioTurn = true;
+       while (isCyclic) {
+              cycleBroken = true;
               for (int node = 0; node < numSubTasks; node++) {
                      bool outerBreak = false;
                      if (notOnCycle[node])
@@ -321,10 +317,12 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
                      for (int neighbor = 0; neighbor < numSubTasks; neighbor++) {
                             if (node == neighbor || keepEdge[node][neighbor] || notOnCycle[neighbor] || orderings[node][neighbor]==false)
                                    continue;
+                            if (noPrioTurn && prioOrderings[node][neighbor]==true) // in the first round we try to keep "priority edges"
+                                   continue;
                             orderings[node][neighbor]=false;
                             inDegree[neighbor]--;
                             outDegree[node]--;
-                            cout << "Removed edge " << node << " < " << neighbor << endl;
+                            //cout << "Removed edge " << node << " < " << neighbor << endl;
                             isCyclic = getCyclicPart(numSubTasks, inDegree, outDegree, notOnCycle, orderings);
                             if (!isCyclic) {
                                    outerBreak = true;
@@ -334,8 +332,10 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
                      if (outerBreak)
                             break;
               }
+              noPrioTurn = false;
        }
 
+       /*
        cout << "After removing cycles: " << endl;
        for (int t = 0; t < numSubTasks; t++) {
               for (int i = 0; i < numSubTasks; i++) {
@@ -343,8 +343,10 @@ void removeCyclesAndGetTotalOrder(Model* model, int method, bool ***tasks_pre_ef
                             cout << t << " < " << i << endl;
               }
        }
+       */
 
        getTotalOrder(numSubTasks, orderings, totalOrder);
+       return cycleBroken;
 }
 
 void getRandomTotalOrder(Model* model, int method, vector<int>& totalOrder) {
@@ -419,6 +421,14 @@ void Linearize(Model* model, const string& inference_type, bool collect_statisti
 
        assert(inference_type == "random" || inference_type == "simple" || inference_type == "complex");
 
+       cout << "- Linearization type: " << inference_type << endl;
+       int poMethods = 0;
+       for (int method = 0; method < model->numMethods; method++) {
+              if (!model->isMethodTotallyOrdered(method))
+                     poMethods++;
+       }
+       cout << "- Number of PO methods: " << poMethods << " out of " << model->numMethods << endl;
+
        if (inference_type == "random") {
 
               for (int method = 0; method < model->numMethods; method++) {
@@ -433,22 +443,29 @@ void Linearize(Model* model, const string& inference_type, bool collect_statisti
        // simple or complex
        } else {
               // set up storage of inferred precs and effs
-              bool*** all_pre_eff = new bool**[3]; // [3][numTasks][numStateBits]
-              for (int i = 0; i < 3; i++) {
+              // 0: Possible Precs, 1: Possible Add, 2: Possible Del, 3: Guaranteed Precs (only for Connys Precs)
+              bool*** all_pre_eff = new bool**[4]; // [3][numTasks][numStateBits]
+              for (int i = 0; i < 4; i++) {
                      all_pre_eff[i] = new bool*[model->numTasks];
                      for (int t = 0; t < model->numTasks; t++) {
                             all_pre_eff[i][t] = new bool[model->numStateBits]{false};
 
                             if (t < model->numActions) {
-                                   for (int v = 0; v < model->numPrecs[t]; v++)
-                                          all_pre_eff[0][t][model->precLists[t][v]] = true;
-                                   for (int v = 0; v < model->numAdds[t]; v++)
-                                          all_pre_eff[0][t][model->addLists[t][v]] = true;
-                                   for (int v = 0; v < model->numDels[t]; v++)
-                                          all_pre_eff[0][t][model->delLists[t][v]] = true;
+                                   if (i == 0 || i == 3) {
+                                          for (int v = 0; v < model->numPrecs[t]; v++) {
+                                                 all_pre_eff[i][t][model->precLists[t][v]] = true;
+                                          }
+                                   } else if (i == 1) {
+                                        for (int v = 0; v < model->numAdds[t]; v++)
+                                          all_pre_eff[i][t][model->addLists[t][v]] = true;
+                                   } else {
+                                         for (int v = 0; v < model->numDels[t]; v++)
+                                          all_pre_eff[i][t][model->delLists[t][v]] = true;
+                                   }
                             }
                      }
               }
+              int numLinCritSat = 0;
 
               if (inference_type == "simple") {
                      get_mentioned(model, all_pre_eff);
@@ -464,9 +481,11 @@ void Linearize(Model* model, const string& inference_type, bool collect_statisti
                      int numSubTasks = model->numSubTasks[method];
                      vector<int> totalOrder(numSubTasks);
                      vector<std::vector<bool>> orderings(numSubTasks, vector<bool>(numSubTasks, false));
+                     vector<std::vector<bool>> prioOrderings(numSubTasks, vector<bool>(numSubTasks, false));
 
-                     addOrderings(model, method, all_pre_eff, orderings);
-                     removeCyclesAndGetTotalOrder(model, method, all_pre_eff, orderings, totalOrder);
+                     addOrderings(model, method, all_pre_eff, orderings, prioOrderings);
+                     if (!removeCyclesAndGetTotalOrder(model, method, orderings, prioOrderings, totalOrder))
+                            numLinCritSat++;
                      overwriteOrdering(model, method, totalOrder);
               }
 
@@ -479,6 +498,7 @@ void Linearize(Model* model, const string& inference_type, bool collect_statisti
                      delete[] all_pre_eff[i];
               }
               delete[] all_pre_eff;
+              cout << "- The linearization criterion was satisfied for " << numLinCritSat << " of " << poMethods << " methods." << endl;
        } // found orderings
 
 }

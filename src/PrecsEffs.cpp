@@ -36,7 +36,7 @@ namespace progression {
         gettimeofday(&tp, NULL);
         long currentT = tp.tv_sec * 1000 + tp.tv_usec / 1000;
 
-        cout << "- Inference time " << double(currentT - startT) / 1000 << " seconds " << endl;
+        cout << "- Inference time for prec/effs " << double(currentT - startT) / 1000 << " seconds " << endl;
         printResults(model, preconditions, poss_eff_positive, eff_positive, poss_eff_negative, eff_negative, amount_compound_tasks);
 
         for (int i = 0; i < model->numMethods; i++) {
