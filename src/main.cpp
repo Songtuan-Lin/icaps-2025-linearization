@@ -8,19 +8,20 @@ void write_sas(string outfile, Model *htn);
 void write_action(ofstream &fOut, int i, Model *htn);
 
 int main(int argc, char** argv) {
-    string file_path = argv[1];
-    Model *htn = setup_model(file_path);
+    string filePath = argv[1];
+    Model *htn = setup_model(filePath);
     /*for (int m =0; m < htn->numMethods; m++) {
         if (!htn->isMethodTotallyOrdered(m)) {
             cout << "Method " << m << " is not TO: " << htn->methodNames[m] << endl;
         }
     }*/
     ofstream o;
+    string inferenceType = argv[2];
     // Choose between type: random, simple or complex
-    Linearize(htn, "complex", false, o);
+    Linearize(htn, inferenceType, false, o);
     //ComplexInference(htn, false, o, true);
     htn->generateMethodRepresentation();
-    string outFile = argv[2];
+    string outFile = argv[3];
     write_sas(outFile, htn);
     return 0;
 }
